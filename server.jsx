@@ -1,3 +1,4 @@
+const fs = require("fs");
 const express = require("express");
 const mysql = require("mysql");
 const cors = require("cors");
@@ -6,15 +7,16 @@ const path = require("path");
 const multer = require("multer");
 
 // Use memory storage to store images in buffer before inserting into DB
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+
+
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'uploads'))); 
+app.use(express.static('public')); 
 
 const db = mysql.createConnection({
   host: "localhost",
@@ -29,7 +31,77 @@ app.get("/", (req, res) => {
   res.send("sdibababababe");
 });
 
+
+const dir = 'public/images';
+if (!fs.existsSync(dir)) {
+  fs.mkdirSync(dir, { recursive: true });
+}
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'public/images');
+  },
+  filename: (req, file, cb) => {
+    cb(null, file.fieldname + "_" + Date.now() + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ storage: storage });
+app.post('/upload', upload.single('image'), (req, res) => {
+  const { account_id, isUpdate } = req.body;
+  const filename = req.file.filename;
+
+  if (isUpdate === 'true') {
+    // 1. Get old image
+    const selectQuery = 'SELECT filename FROM images WHERE account_id = ? LIMIT 1';
+    db.query(selectQuery, [account_id], (err, result) => {
+      if (err) return res.status(500).json({ message: 'DB error' });
+
+      if (result.length > 0) {
+        const oldFilename = result[0].filename;
+
+        // 2. Delete file from uploads folder
+        const fs = require('fs');
+        fs.unlink(`uploads/${oldFilename}`, (fsErr) => {
+          if (fsErr) console.error("Failed to delete old image:", fsErr);
+        });
+
+        // 3. Delete old DB record
+        db.query('DELETE FROM images WHERE account_id = ?', [account_id]);
+      }
+
+      // 4. Insert new image
+      insertNewImage();
+    });
+  } else {
+    insertNewImage();
+  }
+
+  function insertNewImage() {
+    const query = 'INSERT INTO images (filename, account_id) VALUES (?, ?)';
+    db.query(query, [filename, account_id], (err, result) => {
+      if (err) return res.status(500).json({ message: 'Upload failed.' });
+      res.json({ message: 'Image uploaded successfully.' });
+    });
+  }
+});
+
+
+app.get('/images/:accountId', (req, res) => {
+  const accountId = req.params.accountId;
+
+  const sql = "SELECT * FROM images WHERE account_id = ?";
+  db.query(sql, [accountId], (err, results) => {
+    if (err) {
+      console.error("Fetch error:", err);
+      return res.status(500).json({ message: "Failed to retrieve images" });
+    }
+
+    res.json(results);
+  });
+});
+
 app.post("/login", (req, res) => {
+  console.log("Login request received:", req.body);
   const { IDNumber, UserType, Password } = req.body;
   const sql = "SELECT * FROM account WHERE IDNumber = ? AND UserType = ? AND Password = ?";
   db.query(sql, [IDNumber, UserType, Password], (err, results) => {
@@ -70,10 +142,10 @@ app.get("/loginview", (req, res) => {
 app.post("/name/add", (req, res) => {
   const {
     id = "",
-    IDNumber = "", // Use this instead of account_id from frontend
+    IDNumber = "",
     first_name = "",
     middle_name = "",
-    last_name,
+    last_name =" ",
     extension = "",
     Position = "",
     ResidentType = "",
@@ -81,11 +153,12 @@ app.post("/name/add", (req, res) => {
     ZoneNo = ""
   } = req.body;
 
+  // requiring the form to fill
   if (!first_name || !last_name || !IDNumber) {
     return res.status(400).json({ message: "First name, Last name, and IDNumber are required." });
   }
 
-  // First, check if the IDNumber exists in the accounts table
+  //Check if the IDNumber is in table database
   const checkSql = "SELECT * FROM account WHERE IDNumber = ?";
   db.query(checkSql, [IDNumber], (err, results) => {
     if (err) {
@@ -105,7 +178,7 @@ app.post("/name/add", (req, res) => {
     `;
     const values = [
       id,
-      IDNumber, // Use IDNumber here
+      IDNumber,
       first_name,
       middle_name,
       last_name,
@@ -129,7 +202,11 @@ app.post("/name/add", (req, res) => {
 
 // POST - Add a new account
 app.post("/login/add", (req, res) => {
-  const { IDNumber = "", Password = "", UserType = "" } = req.body;
+  const {
+    IDNumber = "",
+    Password = "",
+    UserType = ""
+  } = req.body;
 
   if (!IDNumber || !Password || !UserType) {
     return res.status(400).json({ message: "All fields are required" });
@@ -319,16 +396,73 @@ app.post("/i_info/add", (req, res) => {
   });
 });
 
-// app.get("/iinfo", (req, res) => {
-//   const sql = "SELECT * FROM i_info";
-//   db.query(sql, (err, results) => {
-//     if (err) {
-//       console.error("Fetch error:", err);
-//       return res.status(500).json({ message: "Error fetching login data" });
-//     }
-//     res.status(200).json(results);
-//   });
-// });
+app.get("/usercinfo/:account_id", (req, res) => {
+  const account_id = req.params.account_id;
+  const sql = "SELECT * FROM c_infos WHERE account_id = ?";
+  
+  db.query(sql, [account_id], (err, results) => {
+    if (err) {
+      console.error("Fetch error:", err);
+      return res.status(500).json({ message: "Error fetching personal info." });
+    }
+    if (results.length === 0) {
+      return res.status(404).json({ message: "No personal info found." });
+    }
+    res.status(200).json(results[0]); // Assuming you want to return a single record
+  });
+});
+
+app.post("/usercinfo/add", (req, res) => {
+  const {
+    id = "",
+    account_id = "",
+    gmail = "",
+    c_no = "",
+  } = req.body;
+
+  if (!gmail || !c_no) {
+    return res.status(400).json({ message: "gmail and number status are required" });
+  }
+
+  // Check if personal info already exists for this account_id
+  const checkSql = "SELECT * FROM c_infos WHERE account_id = ?";
+  db.query(checkSql, [account_id], (err, result) => {
+    if (err) {
+      console.error("Select error:", err);
+      return res.status(500).json({ message: "Error checking existing info." });
+    }
+
+    if (result.length > 0) {
+      // If exists, perform update
+      const updateSql = `
+        UPDATE c_infos 
+        SET gmail = ?, c_no = ?
+        WHERE account_id = ?`;
+      db.query(updateSql, [gmail, c_no, account_id], (err, updateResult) => {
+        if (err) {
+          console.error("Update error:", err);
+          return res.status(500).json({ message: "Error updating contact info." });
+        }
+        return res.status(200).json({ message: "contact o updated." });
+      });
+    } else {
+      // If not exists, insert new
+      const insertSql = `
+        INSERT INTO c_infos (id, account_id, gmail, c_no)
+        VALUES (?, ?, ?, ?)`;
+      const values = [id, account_id, gmail, c_no];
+
+      db.query(insertSql, values, (err, insertResult) => {
+        if (err) {
+          console.error("Insert error:", err);
+          return res.status(500).json({ message: "Error adding personal info." });
+        }
+        return res.status(201).json({ message: "Personal info added.", id: insertResult.insertId });
+      });
+    }
+  });
+});
+
 app.get("/name/:account_id", (req, res) => {
   const account_id = req.params.account_id;
   const sql = "SELECT * FROM user WHERE account_id = ?";
@@ -345,75 +479,6 @@ app.get("/name/:account_id", (req, res) => {
   });
 });
 
-app.get("/image/:account_id", (req, res) => {
-  const account_id = req.params.account_id;
-  const sql = "SELECT * FROM profile WHERE account_id = ?";
-
-  db.query(sql, [account_id], (err, results) => {
-    if (err) {
-      console.error("Fetch error:", err);
-      return res.status(500).json({ message: "Error fetching image." });
-    }
-    if (results.length === 0) {
-      return res.status(404).json({ message: "No image found." });
-    }
-
-    // Assuming the image is stored in the 'uploads' folder with the filename stored in 'imagePath' field
-    const imageUrl = `http://localhost:${PORT}/uploads/${results[0].imagePath}`; // Full URL to the image
-    res.status(200).json({ imageUrl }); // Return the URL
-  });
-});
-
-
-// Endpoint to add or update image
-app.post("/image/add", upload.single("img"), (req, res) => {
-  const account_id = req.body.account_id;
-  const img = req.file.buffer; // Get the image buffer from multer
-  const type = req.file.mimetype; // Get the image type
-  const imagePath = req.file.mimetype; // Get the image type
-
-  if (!account_id || !img || !type) {
-    return res.status(400).json({ message: "Account ID, image, and type are required." });
-  }
-
-  // Check if image info already exists for this account_id
-  const checkSql = "SELECT * FROM profile WHERE account_id = ?";
-  db.query(checkSql, [account_id], (err, result) => {
-    if (err) {
-      console.error("Select error:", err);
-      return res.status(500).json({ message: "Error checking existing info." });
-    }
-
-    if (result.length > 0) {
-      // If exists, perform update
-      const updateSql = `
-        UPDATE profile 
-        SET img = ?, type = ?, imagePath=?
-        WHERE account_id = ?`;
-      db.query(updateSql, [img, type, account_id, imagePath], (err, updateResult) => {
-        if (err) {
-          console.error("Update error:", err);
-          return res.status(500).json({ message: "Error updating image info." });
-        }
-        return res.status(200).json({ message: "Image info updated." });
-      });
-    } else {
-      // If not exists, insert new
-      const insertSql = `
-        INSERT INTO profile (account_id, img, type, imagePath)
-        VALUES (?, ?, ?, ?)`;
-      const values = [account_id, img, type, ];
-
-      db.query(insertSql, values, (err, insertResult) => {
-        if (err) {
-          console.error("Insert error:", err);
-          return res.status(500).json({ message: "Error adding image info." });
-        }
-        return res.status(201).json({ message: "Image info added.", id: insertResult.insertId });
-      });
-    }
-  });
-});
 
 app.get("/cert/:account_id", (req, res) => {
   const account_id = req.params.account_id;
@@ -444,6 +509,8 @@ app.get('/user/:account_id', (req, res) => {
 });
 
 
-app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+
+app.listen(5000, "0.0.0.0", () => {
+  console.log("Server running on port 5000");
 });
+
