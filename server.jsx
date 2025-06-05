@@ -19,10 +19,11 @@ app.use(express.json());
 app.use(express.static('public')); 
 
 const db = mysql.createConnection({
-  host: "localhost",
-  user: "root",
-  password: "",
-  database: "brgy",
+  host: "bv0eriprexjmkp6i5rgc-mysql.services.clever-cloud.com",
+  port: 3306,
+  user: "uxmygvad7ejy3zwd",
+  password: "LazRYKwQGsu2DjzvAoU5",
+  database: "bv0eriprexjmkp6i5rgc"
 });
 
 app.use(express.json()); // Parse JSON requests
